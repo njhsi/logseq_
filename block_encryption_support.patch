@@ -1,8 +1,8 @@
 diff --git a/resources/electron-builder.yml b/resources/electron-builder.yml
-index 2afb9ee73f..c17fb524d2 100644
+index eaaccc1..7638c61 100644
 --- a/resources/electron-builder.yml
 +++ b/resources/electron-builder.yml
-@@ -25,6 +25,7 @@ extraResources:
+@@ -55,6 +55,7 @@ extraResources:
      to: sidecar
  
  mac:
@@ -10,8 +10,20 @@ index 2afb9ee73f..c17fb524d2 100644
    artifactName: ${productName}-darwin-${arch}-${version}.${ext}
    icon: icons/logseq_big_sur.icns
    target:
+diff --git a/scripts/prepare-desktop-runtime-js.mjs b/scripts/prepare-desktop-runtime-js.mjs
+index 9408746..5196f0b 100644
+--- a/scripts/prepare-desktop-runtime-js.mjs
++++ b/scripts/prepare-desktop-runtime-js.mjs
+@@ -73,7 +73,6 @@ async function main() {
+   await fs.mkdir(staticJsDir, { recursive: true });
+ 
+   for (const pair of copyPairs) {
+-    await assertFreshRuntime(pair);
+     await copyOne(pair);
+   }
+ 
 diff --git a/src/main/frontend/components/block.cljs b/src/main/frontend/components/block.cljs
-index 473abe5699..4c49c77d40 100644
+index 9258734..0a6e2a7 100644
 --- a/src/main/frontend/components/block.cljs
 +++ b/src/main/frontend/components/block.cljs
 @@ -2,6 +2,7 @@
@@ -22,37 +34,28 @@ index 473abe5699..4c49c77d40 100644
              [cljs-bean.core :as bean]
              [cljs.core.match :refer [match]]
              [clojure.set :as set]
-@@ -2672,6 +2673,89 @@
+@@ -2689,6 +2690,82 @@
                      (and (not top?) (= move-to :top)))
          (dnd-separator move-to)))))
  
-+(rum/defcs ^:large-vars/cleanup-todo
-+  xcrypt-block < rum/static
-+  (rum/local nil ::content)
-+  (rum/local true ::textclear?)
-+  (rum/local "" ::password)
-+  {:did-mount (fn [state]
-+                (state/set-editor-args! (:rum/args state))
-+                state)
-+  :will-mount (fn [state]
-+                 (let [block-uuid (first (:rum/args state))
-+		       block (db/entity [:block/uuid block-uuid])
-+		       encrypted? (= 1 (:block/created-at block))
-+		      ]
-+		   (reset! (::content state) (:block/title block))
-+		   (reset! (::textclear? state) (not encrypted?))
-+                   (assoc state ::block-uuid block-uuid)))}
-+  [state block-uuidid]
-+  (let [block-id (::block-uuid state)
-+	block (db/entity [:block/uuid block-id])
-+	text-input-id (str "ls-encryption-" block-id)
-+	textclear? (::textclear? state)
-+        password (::password state)
++(hsx/defc ^:large-vars/cleanup-todo  xcrypt-block
++  [block-id]
++  (let [block (db/entity [:block/uuid block-id])
 +	encrypted? (= 1 (:block/created-at block))
-+        *content (::content state)
-+	]
++	text-input-id (str "ls-encryption-" block-id)
++	*textclear? (hooks/use-memo #(atom (not encrypted?)) [])
++	*password (hooks/use-memo #(atom nil) [])
++	*content (hooks/use-memo #(atom (:block/title block)) [])
++        [content] (hooks/use-atom *content)
++	[password] (hooks/use-atom *password)
++	[textclear?] (hooks/use-atom *textclear?)]
++;    (hooks/use-effect!
++;     (fn []
++;       (reset! *content (:block/title block))
++;       (reset! *textclear? (= 1 (:block/created-at block)))
++;     [block-id]))
 +
-+	(println "00 -- "  "encrypted?:" encrypted? "textclear?:" textclear? "title:" (:block/title block))
++    (println "00 -- "  "encrypted?:" encrypted? "textclear?:" textclear? "password:" password "content:" content)
 +
 +    [:div.export.resize
 +     {:class "-m-5"}
@@ -61,49 +64,51 @@ index 473abe5699..4c49c77d40 100644
 +      (ui/ls-textarea
 +	{:id                text-input-id
 +	:cacheMeasurements true
-+        :default-value     @*content
++        :default-value     content
 +        :auto-focus        false
-+        :read-only         (not @textclear?)
-+        :on-change (fn [e] (when @textclear?
++        :read-only         (not textclear?)
++        :on-change (fn [e] (when textclear?
 +                            ;;(state/set-edit-content! text-input-id (util/evalue e) true)
-+			    (reset! (::content state) (util/evalue e))
++			    (reset! *content (util/evalue e))
 +                            ))
 +       })
 +
++    (println "11 -- "  "encrypted?:" encrypted? "textclear?:" textclear? "password:" password "content:" content)
++
 +      [:input.form-input.block.w-full.sm:text-sm.sm:leading-5.my-2
 +       {:type "password"
-+        :placeholder (if @textclear?  "Password ..(empty to disable encryption)" "Password")
++        :placeholder (if textclear?  "Password ..(empty to disable encryption)" "Password")
 +        :auto-focus true
 +        :on-change (fn [e]
-+                     (reset! password (util/evalue e)) )}]
++                     (reset! *password (util/evalue e)) )}]
 +
-+(ui/button (if @textclear? "Save!" "Decrypt!")
-+                 :on-click (if @textclear?
++(ui/button (if textclear? "Save!" "Decrypt!")
++                 :on-click (if textclear?
 +                               (fn []
-+                                 (when (string/blank? @password)
++                                 (when (string/blank? password)
 +				 (println "textclear noPass"  block "created-at:" (:block/created-at block))
-+                                   (editor-handler/save-block-aux! block @*content {})
++                                   (editor-handler/save-block-aux! block content {})
 +				   (property-handler/set-block-property! block-id :block/created-at (:block/updated-at block))
 +				   )
-+                                 (when-not (string/blank? @password)
-+				 	   (println "password:" @password "content:" @*content)
-+                                 (p/let [encrypted_v      (crypt/<encrypt-text-by-text-password @password @*content)
++                                 (when-not (string/blank? password)
++				 	   (println "password:" password "content:" content)
++                                 (p/let [encrypted_v      (crypt/<encrypt-text-by-text-password password content)
 +				 	 encrypted (ldb/write-transit-str encrypted_v)
-+                                         title     (first (string/split-lines @*content))
++                                         title     (first (string/split-lines content))
 +                                         title (if (string/blank? title) "ENCRYPTED BLOCK" title)]
 +					 (println "title:" title  "encrypted:" encrypted)
 +                                   (editor-handler/save-block-aux! block (string/join "\n" [title encrypted]) {})
 +				   (property-handler/set-block-property! block-id :block/created-at 1)
 +                                   )))
 +                               (fn []
-+			         (println "content:" @*content "password:" @password "block:" block "encrypted:" (rest (string/split-lines @*content)))
-+                                 (p/let [encrypted (string/join "\n" (rest (string/split-lines @*content)))
++			         (println "content:" content "password:" password "block:" block "encrypted:" (rest (string/split-lines content)))
++                                 (p/let [encrypted (string/join "\n" (rest (string/split-lines content)))
 +				 	encrypted_v (ldb/read-transit-str encrypted)
-+				 	decrypted (crypt/<decrypt-text-by-text-password @password encrypted_v)]
++				 	decrypted (crypt/<decrypt-text-by-text-password password encrypted_v)]
 +				   (println "decrypted:" decrypted)
 +                                   (state/set-edit-content! text-input-id decrypted)
-+   				   (reset! (::content state) decrypted)
-+                                   (reset! textclear? true))
++   				   (reset! *content decrypted)
++                                   (reset! *textclear? true))
 +                                 )))
 +
 + ]]))
@@ -112,7 +117,7 @@ index 473abe5699..4c49c77d40 100644
  (defn- block-content-inner
    [config block body plugin-slotted? collapsed? block-ref-with-title?]
    (if plugin-slotted?
-@@ -2681,7 +2765,7 @@
+@@ -2698,7 +2775,7 @@
        (-> block (dissoc :block/children :block/page)))]
  
      (when-not (contains? #{:code :math} (:logseq.property.node/display-type block))
@@ -121,7 +126,7 @@ index 473abe5699..4c49c77d40 100644
          (when (and (not block-ref-with-title?)
                     (seq body)
                     (or (not title-collapse-enabled?)
-@@ -2689,6 +2773,11 @@
+@@ -2706,6 +2783,11 @@
                              (or (not collapsed?)
                                  (some? (mldoc/extract-first-query-from-ast body))))))
            [:div.block-body
@@ -133,16 +138,16 @@ index 473abe5699..4c49c77d40 100644
             (let [body (block/trim-break-lines! (:block.temp/ast-body block))
                   uuid (:block/uuid block)
                   raw-content (or (:block/raw-title block) (:block/title block) "")
-@@ -2697,7 +2786,7 @@
+@@ -2714,7 +2796,7 @@
               (for [[idx child] (medley/indexed body)]
                 (when-let [block (markup-element-cp config child)]
-                  (rum/with-key (block-child block)
--                   (str uuid "-" idx)))))])))))
-+                   (str uuid "-" idx))))))])))))
+                  ^{:key (str uuid "-" idx)}
+-                 [block-child block])))])))))
++                 [block-child block]))))])))))
  
- (rum/defcs block-tag <
-   (rum/local false ::hover?)
-@@ -3252,7 +3341,7 @@
+ (hsx/defc block-tag
+   [block tag config popup-opts]
+@@ -3268,7 +3350,7 @@
                                        :format format}
                                       edit-input-id
                                       config))]
@@ -152,18 +157,18 @@ index 473abe5699..4c49c77d40 100644
             (and (ldb/asset? block) (img-audio-video? block))
             [:div.flex.flex-col.asset-block-wrap.w-full
 diff --git a/src/main/frontend/components/content.cljs b/src/main/frontend/components/content.cljs
-index ef1d9bc138..915985fcda 100644
+index e36e6f6..d4dbddc 100644
 --- a/src/main/frontend/components/content.cljs
 +++ b/src/main/frontend/components/content.cljs
-@@ -4,6 +4,7 @@
-             [clojure.string :as string]
+@@ -2,6 +2,7 @@
+   (:require [clojure.string :as string]
              [electron.ipc :as ipc]
              [frontend.commands :as commands]
 +            [frontend.components.block :as block]
              [frontend.components.block.comments-model :as comments-model]
              [frontend.components.editor :as editor]
              [frontend.components.export :as export]
-@@ -295,6 +296,12 @@
+@@ -296,6 +297,12 @@
                         (shui/dialog-open!
                          #(export/export-blocks [block-id] {:export-type :block})))}
            (t :export/copy-or-export-as))
