@@ -22,8 +22,108 @@ index 9408746..5196f0b 100644
      await copyOne(pair);
    }
  
+diff --git a/src/main/frontend/common/crypt.cljs b/src/main/frontend/common/crypt.cljs
+index c73da2b..1d1991a 100644
+--- a/src/main/frontend/common/crypt.cljs
++++ b/src/main/frontend/common/crypt.cljs
+@@ -2,6 +2,7 @@
+   "crypto utils"
+   (:require [lambdaisland.glogi :as log]
+             [logseq.db :as ldb]
++	    [clojure.string :as string]
+             [promesa.core :as p]))
+ 
+ (defonce subtle (.. js/crypto -subtle))
+@@ -307,3 +308,87 @@
+     (fn [e]
+       (log/error "decrypt-text-by-text-password" e)
+       (ex-info "decrypt-text-by-text-password" {} e)))))
++
++
++(defn array-buffer->base64 [buffer]
++  (let [bytes (js/Uint8Array. buffer)
++        binary-str (js/String.fromCharCode.apply nil bytes)]
++    (js/btoa binary-str)))
++
++(defn <export-private-key->pem  [private-key]
++  (assert (instance? js/CryptoKey private-key))
++  (p/let [exported (.exportKey subtle "pkcs8" private-key)
++          b64 (array-buffer->base64 exported)
++	  chunks (->> b64
++                    (partition-all 64)
++                    (map #(apply str %)))
++          body (string/join "\n" chunks)]
++	(str "-----BEGIN PRIVATE KEY-----\n"
++         body
++         "\n-----END PRIVATE KEY-----")))
++
++(defn <export-public-key->pem  [public-key]
++  (assert (instance? js/CryptoKey public-key))
++  (p/let [exported (.exportKey subtle "spki" public-key)
++          b64 (array-buffer->base64 exported)
++	  chunks (->> b64
++                    (partition-all 64)
++                    (map #(apply str %)))
++          body (string/join "\n" chunks)]
++	(str "-----BEGIN PUBLIC KEY-----\n"
++         body
++         "\n-----END PUBLIC KEY-----")))
++
++
++;; 1. Convert PEM string to a raw byte ArrayBuffer
++(defn pem->array-buffer [pem-str]
++  (let [;; Strip out Begin/End headers and any whitespace
++        binary-str (-> pem-str
++                       (string/replace #"-{5}BEGIN[A-Z0-9 ]+-{5}" "")
++                       (string/replace #"-{5}END[A-Z0-9 ]+-{5}" "")
++                       (string/replace #"\s" ""))
++        ;; Base64 decode the string into binary
++        byte-characters (.atob js/window binary-str)
++        byte-len        (.-length byte-characters)
++        array-buffer    (js/ArrayBuffer. byte-len)
++        ui-array        (js/Uint8Array. array-buffer)]
++    (loop [i 0]
++      (when (< i byte-len)
++        (aset ui-array i (.charCodeAt byte-characters i))
++        (recur (inc i))))
++    array-buffer))
++
++;; 2. Import the ArrayBuffer using Web Crypto API
++(defn import-rsa-key [pem-text key-type]
++  (let [is-private? (= key-type :private)
++        format        (if is-private? "pkcs8" "spki")
++        usages        (if is-private? #{"decrypt"} #{"encrypt"})
++        ab-data       (pem->array-buffer pem-text)]
++    (-> (js/window.crypto.subtle.importKey
++         format
++         ab-data
++         #js {:name "RSA-OAEP" :hash "SHA-256"}
++         true
++         (to-array usages))
++        (.then (fn [crypto-key]
++                 crypto-key))
++        (.catch (fn [err]
++                  (js/console.error "Error importing key:" err))))))
++
++(defn <encrypt-bassword-by-key
++  [pubkey bassword]
++  (assert (and (instance? js/CryptoKey pubkey)
++               (string? bassword)))
++  (p/let [encoded (.encode (js/TextEncoder.) bassword)
++          encrypted (.encrypt subtle
++                                      #js {:name "RSA-OAEP" :hash "SHA-256"}
++                                      pubkey
++                                      encoded)]
++            (array-buffer->base64 encrypted)				     
++;;	  b64 (array-buffer->base64 encrypted)
++;;	  chunks (->> b64
++;;                    (partition-all 64)
++;;                    (map #(apply str %)))
++;;          body (string/join "\n" chunks)]
++;;        (str body)
++))
 diff --git a/src/main/frontend/components/block.cljs b/src/main/frontend/components/block.cljs
-index 9258734..0a6e2a7 100644
+index 5484f81..bf3f608 100644
 --- a/src/main/frontend/components/block.cljs
 +++ b/src/main/frontend/components/block.cljs
 @@ -2,6 +2,7 @@
@@ -34,10 +134,27 @@ index 9258734..0a6e2a7 100644
              [cljs-bean.core :as bean]
              [cljs.core.match :refer [match]]
              [clojure.set :as set]
-@@ -2689,6 +2690,82 @@
+@@ -2689,6 +2690,105 @@
                      (and (not top?) (= move-to :top)))
          (dnd-separator move-to)))))
  
++(defonce xpubkey-text
++"-----BEGIN PUBLIC KEY-----
++MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEArEwzY/WY0iDQ3Twbpx8F
++U8QjOiDjgMnjGlmw4JSbqPy/+0lKjb8VvpIT6PPxEnZ/W4F8gw6QOHKr7Cxur2IY
++dyyLYG37tdf59BxxqfT/rUTxPPXJC+W+tUTxxR4o12PBEmoVFhMZ+69kXy3imTtG
++Zl7NI2lBpGaxPcHRpul5N8iVWz0/xeL9a190QrESJx0flk9EEb9ApBSEva6yt1WM
++RON0h0rQXrP+LQEp9Nv81XQOFVuiyGX35e0CggM9RllGTZz8IDQwlalpCk0Shqd5
++hXTYccyswD/bLcJdyCPoXr7AYvS77DyEj6AnlLpc1f4l3hjR4cXxsoC4GG1oeyCI
++5AZ3zZnldC2418KGQ2OPl407YHhDnGzdftB8RG3HGivfygpcBQRNDs0ZMk1bimid
++18r6IsHGGd1kKgwlzhH4YrGgrHvCrHtfU7zA7EAUitc3R0ko1bajHkgzE7w9h3jG
++kyF9wC6QwjOHlWCx7nNJm/ha7fuLmt9IXAWrxpywCjEtk4yCQIWTDllFGgZvrmhs
++yiMtBikzQex6gGCMtAMDw53GcmmDYWgAsOMvGcAAsmEqrt3dlq0+hB2rPxt6w9gG
++cWD8LIeAY8Up4ZEactc2vnBHyQp/J5Fz7HrW4antBMSm7PkmQFfamogFUbPdKRmA
++6ZMj5NgdMr9Wu5iNzigjjOcCAwEAAQ==
++-----END PUBLIC KEY-----")
++
++
 +(hsx/defc ^:large-vars/cleanup-todo  xcrypt-block
 +  [block-id]
 +  (let [block (db/entity [:block/uuid block-id])
@@ -56,6 +173,10 @@ index 9258734..0a6e2a7 100644
 +;     [block-id]))
 +
 +    (println "00 -- "  "encrypted?:" encrypted? "textclear?:" textclear? "password:" password "content:" content)
++    (p/let [pubkey (ldb/read-transit-str xpubkey-text)
++            encrypted (crypt/<encrypt-bassword-by-key pubkey "1122")]
++	   (println "22:" pubkey encrypted)
++    )
 +
 +    [:div.export.resize
 +     {:class "-m-5"}
@@ -82,6 +203,7 @@ index 9258734..0a6e2a7 100644
 +        :on-change (fn [e]
 +                     (reset! *password (util/evalue e)) )}]
 +
++;;#base64 -d x | openssl pkeyutl -decrypt -inkey private_key.pem -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256
 +(ui/button (if textclear? "Save!" "Decrypt!")
 +                 :on-click (if textclear?
 +                               (fn []
@@ -91,23 +213,24 @@ index 9258734..0a6e2a7 100644
 +				   (property-handler/set-block-property! block-id :block/created-at (:block/updated-at block))
 +				   )
 +                                 (when-not (string/blank? password)
-+				 	   (println "password:" password "content:" content)
-+                                 (p/let [encrypted_v      (crypt/<encrypt-text-by-text-password password content)
-+				 	 encrypted (ldb/write-transit-str encrypted_v)
-+                                         title     (first (string/split-lines content))
-+                                         title (if (string/blank? title) "ENCRYPTED BLOCK" title)]
-+					 (println "title:" title  "encrypted:" encrypted)
-+                                   (editor-handler/save-block-aux! block (string/join "\n" [title encrypted]) {})
++                                   (p/let [encrypted_v      (crypt/<encrypt-text-by-text-password password content)
++                                          encrypted (ldb/write-transit-str encrypted_v)
++					  title     (first (string/split-lines content))
++					  title (if (string/blank? title) "ENCRYPTED BLOCK" title)
++                                          public-key (crypt/import-rsa-key xpubkey-text :public)
++                                          xbass (crypt/<encrypt-bassword-by-key public-key "1122")] 
++				   (println "\n\nxcrypt--- title:" title  "\nencrypted:" encrypted "\nrsa-xbass:" xbass)
++                                   (editor-handler/save-block-aux! block (string/join "\n" [title xbass encrypted]) {})
 +				   (property-handler/set-block-property! block-id :block/created-at 1)
 +                                   )))
 +                               (fn []
-+			         (println "content:" content "password:" password "block:" block "encrypted:" (rest (string/split-lines content)))
-+                                 (p/let [encrypted (string/join "\n" (rest (string/split-lines content)))
-+				 	encrypted_v (ldb/read-transit-str encrypted)
-+				 	decrypted (crypt/<decrypt-text-by-text-password password encrypted_v)]
-+				   (println "decrypted:" decrypted)
++			         (println "\n\ncontent:" content "\npassword:" password "\nblock:" block "\nencrypted:" (last (string/split-lines content)))
++                                 (p/let [encrypted (last (string/split-lines content))
++                                         encrypted_v (ldb/read-transit-str encrypted)
++                                         decrypted (crypt/<decrypt-text-by-text-password password encrypted_v)]
++				   (println "\n\nencrypted:" encrypted "\ndecrypted:" decrypted)
 +                                   (state/set-edit-content! text-input-id decrypted)
-+   				   (reset! *content decrypted)
++				   (reset! *content decrypted)
 +                                   (reset! *textclear? true))
 +                                 )))
 +
@@ -117,7 +240,7 @@ index 9258734..0a6e2a7 100644
  (defn- block-content-inner
    [config block body plugin-slotted? collapsed? block-ref-with-title?]
    (if plugin-slotted?
-@@ -2698,7 +2775,7 @@
+@@ -2698,7 +2798,7 @@
        (-> block (dissoc :block/children :block/page)))]
  
      (when-not (contains? #{:code :math} (:logseq.property.node/display-type block))
@@ -126,7 +249,7 @@ index 9258734..0a6e2a7 100644
          (when (and (not block-ref-with-title?)
                     (seq body)
                     (or (not title-collapse-enabled?)
-@@ -2706,6 +2783,11 @@
+@@ -2706,6 +2806,11 @@
                              (or (not collapsed?)
                                  (some? (mldoc/extract-first-query-from-ast body))))))
            [:div.block-body
@@ -138,7 +261,7 @@ index 9258734..0a6e2a7 100644
             (let [body (block/trim-break-lines! (:block.temp/ast-body block))
                   uuid (:block/uuid block)
                   raw-content (or (:block/raw-title block) (:block/title block) "")
-@@ -2714,7 +2796,7 @@
+@@ -2714,7 +2819,7 @@
               (for [[idx child] (medley/indexed body)]
                 (when-let [block (markup-element-cp config child)]
                   ^{:key (str uuid "-" idx)}
@@ -147,7 +270,7 @@ index 9258734..0a6e2a7 100644
  
  (hsx/defc block-tag
    [block tag config popup-opts]
-@@ -3268,7 +3350,7 @@
+@@ -3268,7 +3373,7 @@
                                        :format format}
                                       edit-input-id
                                       config))]
