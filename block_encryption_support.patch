@@ -123,7 +123,7 @@ index c73da2b..1d1991a 100644
 +;;        (str body)
 +))
 diff --git a/src/main/frontend/components/block.cljs b/src/main/frontend/components/block.cljs
-index 5484f81..bf3f608 100644
+index 5484f81..5ce7fc7 100644
 --- a/src/main/frontend/components/block.cljs
 +++ b/src/main/frontend/components/block.cljs
 @@ -2,6 +2,7 @@
@@ -134,7 +134,7 @@ index 5484f81..bf3f608 100644
              [cljs-bean.core :as bean]
              [cljs.core.match :refer [match]]
              [clojure.set :as set]
-@@ -2689,6 +2690,105 @@
+@@ -2689,6 +2690,102 @@
                      (and (not top?) (= move-to :top)))
          (dnd-separator move-to)))))
  
@@ -173,10 +173,6 @@ index 5484f81..bf3f608 100644
 +;     [block-id]))
 +
 +    (println "00 -- "  "encrypted?:" encrypted? "textclear?:" textclear? "password:" password "content:" content)
-+    (p/let [pubkey (ldb/read-transit-str xpubkey-text)
-+            encrypted (crypt/<encrypt-bassword-by-key pubkey "1122")]
-+	   (println "22:" pubkey encrypted)
-+    )
 +
 +    [:div.export.resize
 +     {:class "-m-5"}
@@ -217,9 +213,10 @@ index 5484f81..bf3f608 100644
 +                                          encrypted (ldb/write-transit-str encrypted_v)
 +					  title     (first (string/split-lines content))
 +					  title (if (string/blank? title) "ENCRYPTED BLOCK" title)
-+                                          public-key (crypt/import-rsa-key xpubkey-text :public)
-+                                          xbass (crypt/<encrypt-bassword-by-key public-key "1122")] 
-+				   (println "\n\nxcrypt--- title:" title  "\nencrypted:" encrypted "\nrsa-xbass:" xbass)
++					  public-key-pem (or (:block/xcrypt-rsa-pubkey (state/get-config (state/get-current-repo))) xpubkey-text)
++                                          public-key (crypt/import-rsa-key public-key-pem :public)
++                                          xbass (crypt/<encrypt-bassword-by-key public-key password)] 
++				   (println "\n\nxcrypt--- title:" title  "\nencrypted:" encrypted "\npubkey:" public-key-pem "\nrsa-xbass:" xbass)
 +                                   (editor-handler/save-block-aux! block (string/join "\n" [title xbass encrypted]) {})
 +				   (property-handler/set-block-property! block-id :block/created-at 1)
 +                                   )))
@@ -240,7 +237,7 @@ index 5484f81..bf3f608 100644
  (defn- block-content-inner
    [config block body plugin-slotted? collapsed? block-ref-with-title?]
    (if plugin-slotted?
-@@ -2698,7 +2798,7 @@
+@@ -2698,7 +2795,7 @@
        (-> block (dissoc :block/children :block/page)))]
  
      (when-not (contains? #{:code :math} (:logseq.property.node/display-type block))
@@ -249,7 +246,7 @@ index 5484f81..bf3f608 100644
          (when (and (not block-ref-with-title?)
                     (seq body)
                     (or (not title-collapse-enabled?)
-@@ -2706,6 +2806,11 @@
+@@ -2706,6 +2803,11 @@
                              (or (not collapsed?)
                                  (some? (mldoc/extract-first-query-from-ast body))))))
            [:div.block-body
@@ -261,7 +258,7 @@ index 5484f81..bf3f608 100644
             (let [body (block/trim-break-lines! (:block.temp/ast-body block))
                   uuid (:block/uuid block)
                   raw-content (or (:block/raw-title block) (:block/title block) "")
-@@ -2714,7 +2819,7 @@
+@@ -2714,7 +2816,7 @@
               (for [[idx child] (medley/indexed body)]
                 (when-let [block (markup-element-cp config child)]
                   ^{:key (str uuid "-" idx)}
@@ -270,7 +267,7 @@ index 5484f81..bf3f608 100644
  
  (hsx/defc block-tag
    [block tag config popup-opts]
-@@ -3268,7 +3373,7 @@
+@@ -3268,7 +3370,7 @@
                                        :format format}
                                       edit-input-id
                                       config))]
@@ -304,3 +301,15 @@ index e36e6f6..d4dbddc 100644
  
           (when-not property-default-value?
             (shui/dropdown-menu-item
+diff --git a/src/main/frontend/schema/handler/common_config.cljc b/src/main/frontend/schema/handler/common_config.cljc
+index 18f3ca2..6b852c3 100644
+--- a/src/main/frontend/schema/handler/common_config.cljc
++++ b/src/main/frontend/schema/handler/common_config.cljc
+@@ -27,6 +27,7 @@
+                  [:or :string false? [:vector :string]]]]
+     [:shortcut/doc-mode-enter-for-new-block? :boolean]
+     [:block/title-max-length :int]
++    [:block/xcrypt-rsa-pubkey :string]
+     [:ui/show-command-doc? :boolean]
+     [:ui/show-empty-bullets? :boolean]
+     [:ui/show-full-blocks? :boolean]
